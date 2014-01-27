@@ -35,9 +35,9 @@ The rest of this readme is not finished yet.
 Contents
 ========
 
-* This should be a brief description of the contents of the
-distribution. It should include a list of important features in a
-table like this; *
+.. This should be a brief description of the contents of the
+   distribution. It should include a list of important features in a
+   table like this;
 
 ========== ======================================================
 Name       Description
@@ -53,10 +53,10 @@ ChangeLog  Detailed development change history.
 doc/       Contains project documentation.
 src/       Contains project source code.
 tests/     Contains project unit and functional tests.
-========== =======================================================
+========== ======================================================
 
-* It wouldn't hurt to have a few paragraphs here suggesting were to look
-in the distribution for bits and pieces. *
+.. It wouldn't hurt to have a few paragraphs here suggesting were to
+   look in the distribution for bits and pieces.
 
 
 Install
@@ -65,26 +65,28 @@ Install
 Dependencies
 ------------
 
-* [asn1c](https://github.com/vlm/asn1c)
-* [libev](http://software.schmorp.de/pkg/libev.html)
-* [libpam](http://www.kernel.org/pub/linux/libs/pam/)
+* `asn1c <https://github.com/vlm/asn1c>`_
+* `libev <http://software.schmorp.de/pkg/libev.html>`_
+* `libpam <http://www.kernel.org/pub/linux/libs/pam/`_
 
 
 Build
 -----
 
+To compile and install::
+
     make
     make install
 
-Or (for building debian package):
+Or (for building debian package)::
 
     make debian
 
 Usage
 =====
 
-* Simple Instructions for usage after installing. May include a
-reference to man pages or documentation in doc/, or the following; *
+.. Simple Instructions for usage after installing. May include a
+   reference to man pages or documentation in doc/, or USAGE;
 
 ::
     entente [options]
@@ -97,25 +99,11 @@ Or::
 Options
 -------
 
-* -a
-
-  Allow anonymous access.
-
-* -b basedn
-
-  Set the basedn for the ldap server (default: "dc=entente").
-
-* -l
-
-  Bind to the loopback interface only.
-
-* -p port
-
-  Set local port number (default: 389).
-
-* -d
-
-  Run as a daemon.
+-a  Allow anonymous access.
+-b basedn  Set the basedn for the ldap server (default: "dc=entente").
+-l  Bind to the loopback interface only.
+-p port  Set local port number (default: 389).
+-d  Run as a daemon.
 
 
 Example usage with lighttpd
@@ -142,10 +130,10 @@ lighttpd.conf::
 Support
 =======
 
-* This should list all the user-level contact points for support,
-including mailing lists, discussion forums, online documentation,
-trackers, etc. It should also include instructions or pointers to
-instructions on procedures and conventions when using them. *
+.. This should list all the user-level contact points for support,
+   including mailing lists, discussion forums, online documentation,
+   trackers, etc. It should also include instructions or pointers to
+   instructions on procedures and conventions when using them.
 
 Documentation
 -------------
@@ -159,14 +147,15 @@ http://minkirri.apana.org.au/wiki/LightLdapd
 Discussion
 ----------
 
-* Provide links to any IRC channels, mailing lists or online discussion
-forums, giving any necissary subscription information etc. *
+.. Provide links to any IRC channels, mailing lists or online
+   discussion forums, giving any necissary subscription information
+   etc.
 
 Reporting Problems
 ------------------
 
-* This should describe the procedure for users to report bugs, providing
-any useful links. *
+.. This should describe the procedure for users to report bugs,
+   providing any useful links.
 
 File any problems/bugs/suggestions/questions on the github issue
 tracker.
