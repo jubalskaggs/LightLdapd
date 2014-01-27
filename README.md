@@ -1,8 +1,66 @@
-Entente
+=================
+LightLdapd README
+=================
+
+LightLdapd is a small and easy to manage LDAP server for small
+home/classroom/school sized networks that can include thin clients. It
+is designed to provide network wide users/groups/etc support to
+supplement the excellent network dns/dhcp/tftp support provided by
+dnsmasq.
+
+It uses local PAM and NSS for authentication and to export the local
+passwd/group/shadow/etc system databases. This means it has no special
+separate ldap database to manage, and users/groups/etc can be managed
+normally on the LightLdapd machine. No database setup or ldap
+management tools are required, it just exports all the local
+users/groups/etc. Client machines can then use libpam_ldapd and
+libnss_ldapd to have all the same users/groups/etc as are on the
+machine where LightLdapd is running.
+
+The code is small, clean and efficient C, leveraging of existing
+libraries as much as possible. It uses libev for an efficient event
+loop. It uses asn1c to auto-generate the LDAP message
+parsing/generating from the ASN.1 spec. It uses libpam for
+authentication. It is small and efficient enough to run on a router or
+NAS.
+
+LightLdapd was forked from the excellent entente by Sergey Urbanovich
+with his blessing. The choice to fork was made in order to leave
+entente as simple as possible and avoid adding features needed for
+LightLdapd. Improvements have and will be fed back into entente when
+they don't increase its size.
+
+The rest of this readme is not finished yet.
+
+Contents
+========
+
+* This should be a brief description of the contents of the
+distribution. It should include a list of important features in a
+table like this; *
+
+========== ======================================================
+Name       Description
+========== ======================================================
+README     This file.
+INSTALL    Installation instructions.
+COPYING    Copyright and Licencing details.
+AUTHORS    The main project authors.
+THANKS     All the project contributors.
+NEWS       Summary of fixes and changes for each release.
+TODO       List of outstanding tasks and future plans.
+ChangeLog  Detailed development change history.
+doc/       Contains project documentation.
+src/       Contains project source code.
+tests/     Contains project unit and functional tests.
+========== =======================================================
+
+* It wouldn't hurt to have a few paragraphs here suggesting were to look
+in the distribution for bits and pieces. *
+
+
+Install
 =======
-
-Simplest ldap server with authentication via PAM.
-
 
 Dependencies
 ------------
@@ -22,18 +80,22 @@ Or (for building debian package):
 
     make debian
 
-
 Usage
------
+=====
 
-    # entente [options]
+* Simple Instructions for usage after installing. May include a
+reference to man pages or documentation in doc/, or the following; *
 
-Or:
+::
+    entente [options]
 
-    # /etc/init.d/entente start
-    # # config file: /etc/default/entente
+Or::
 
-### Options
+    /etc/init.d/entente start
+    # config file: /etc/default/entente
+
+Options
+-------
 
 * -a
 
@@ -59,7 +121,7 @@ Or:
 Example usage with lighttpd
 ---------------------------
 
-lighttpd.conf:
+lighttpd.conf::
 
     server.modules += ( "mod_rewrite" )
 
@@ -74,3 +136,48 @@ lighttpd.conf:
             "require" => "user=kiki|user=ooki"
         ),
     )
+
+
+
+Support
+=======
+
+* This should list all the user-level contact points for support,
+including mailing lists, discussion forums, online documentation,
+trackers, etc. It should also include instructions or pointers to
+instructions on procedures and conventions when using them. *
+
+Documentation
+-------------
+
+http://github.com/dbaarda/LightLdapd
+  The project homepage.
+
+http://minkirri.apana.org.au/wiki/LightLdapd
+  An early brainstorming wiki before the github project was created.
+
+Discussion
+----------
+
+* Provide links to any IRC channels, mailing lists or online discussion
+forums, giving any necissary subscription information etc. *
+
+Reporting Problems
+------------------
+
+* This should describe the procedure for users to report bugs, providing
+any useful links. *
+
+File any problems/bugs/suggestions/questions on the github issue
+tracker.
+
+Development
+===========
+
+See DEVELOPMENT for development instructions.
+
+
+----
+
+http://github.com/dbaarda/LightLdapd
+$Id: README,v 65b64de6b1e1 2014/01/20 02:32:20 abo $
