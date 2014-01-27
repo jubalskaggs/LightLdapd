@@ -67,7 +67,7 @@ Dependencies
 
 * `asn1c <https://github.com/vlm/asn1c>`_
 * `libev <http://software.schmorp.de/pkg/libev.html>`_
-* `libpam <http://www.kernel.org/pub/linux/libs/pam/`_
+* `libpam <http://www.kernel.org/pub/linux/libs/pam/>`_
 
 
 Build
