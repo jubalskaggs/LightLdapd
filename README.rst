@@ -86,9 +86,10 @@ Usage
 =====
 
 .. Simple Instructions for usage after installing. May include a
-   reference to man pages or documentation in doc/, or USAGE;
+   reference to man pages or documentation in doc/, or USAGE
 
 ::
+
     entente [options]
 
 Or::
