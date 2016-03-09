@@ -37,7 +37,7 @@
 #define BUF_SIZE 16384
 
 #define fail(msg) do { perror(msg); return; } while (0);
-#define fail1(msg) do { perror(msg); return 1; } while (0);
+#define fail1(msg, ret) do { perror(msg); return ret; } while (0);
 #define ev_close(loop, watcher) do { \
 	ev_io_stop(loop, watcher); \
 	close(watcher->fd); \
@@ -56,7 +56,25 @@
 #define LDAP_DEBUG(msg)
 #endif
 
-int ldap_start();
+typedef struct {
+	char *basedn;
+	int anonymous;
+	ev_loop *loop;
+	ev_io connection_watcher;
+} ldap_server;
+void ldap_server_init(ldap_server *server, char *basedn, int anonymous);
+int ldap_server_start(ldap_server *server, ev_loop *loop, uint32_t addr, int port);
+void ldap_server_stop(ldap_server *server);
+char *ldap_server_cn2name(ldap_server *server, const char *cn);
+
+typedef struct {
+	/* TODO(abo): Complete this and use it. */
+} ldap_connection;
+
+typedef struct {
+	/* TODO(abo): Complete this and use it. */
+} ldap_request;
+
 void accept_cb(ev_loop *loop, ev_io *watcher, int revents);
 void read_cb(ev_loop *loop, ev_io *watcher, int revents);
 typedef struct {
@@ -77,8 +95,6 @@ int auth_pam(const char *user, const char *pw, char **msg, ev_tstamp *delay);
 int auth_pam_conv(int num_msg, const struct pam_message **msg, struct pam_response **resp, void *appdata_ptr);
 void auth_pam_delay(int retval, unsigned usec_delay, void *appdata_ptr);
 
-char *cn2name(const char *cn);
-
 char *setting_basedn = "dc=entente";
 int setting_port = 389;
 int setting_daemon = 0;
@@ -88,45 +104,88 @@ void settings(int argc, char **argv);
 
 int main(int argc, char **argv)
 {
-	settings(argc, argv);
-	if (setting_daemon && daemon(0, 0))
-		fail1("daemon");
-	return ldap_start();
-}
-
-int ldap_start()
-{
-	int serv_sd;
-	int opt = 1;
-	struct sockaddr_in servaddr;
 	ev_loop *loop = EV_DEFAULT;
-	ev_io w_accept;
+	ldap_server server;
+	uint32_t server_addr;
 
-	if ((serv_sd = socket(PF_INET, SOCK_STREAM, 0)) < 0)
-		fail1("socket");
-	if (setsockopt(serv_sd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
-		fail1("setsockopt");
-
-	bzero(&servaddr, sizeof(servaddr));
-	servaddr.sin_family = AF_INET;
-	servaddr.sin_addr.s_addr = htonl(setting_loopback ? INADDR_LOOPBACK : INADDR_ANY);
-	servaddr.sin_port = htons(setting_port);
-
-	if (bind(serv_sd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
-		fail1("bind");
-	if (listen(serv_sd, LISTENQ) < 0)
-		fail1("listen");
-
-	ev_io_init(&w_accept, accept_cb, serv_sd, EV_READ);
-	ev_io_start(loop, &w_accept);
+	settings(argc, argv);
+	server_addr = setting_loopback ? INADDR_LOOPBACK : INADDR_ANY;
+	if (setting_daemon && daemon(0, 0))
+		fail1("daemon", 1);
+	ldap_server_init(&server, setting_basedn, setting_anonymous);
+	if (ldap_server_start(&server, loop, server_addr, setting_port) < 0)
+		fail1("ldap_server_start", 1);
 	ev_run(loop, 0);
 	return 0;
 }
 
+void ldap_server_init(ldap_server *server, char *basedn, int anonymous)
+{
+	server->basedn = basedn;
+	server->anonymous = anonymous;
+	server->loop = NULL;
+	ev_init(&server->connection_watcher, NULL);
+}
+
+int ldap_server_start(ldap_server *server, ev_loop *loop, uint32_t addr, int port)
+{
+	int serv_sd;
+	int opt = 1;
+	struct sockaddr_in servaddr;
+
+	assert(server->loop == NULL);
+	assert(!ev_is_active(&server->connection_watcher));
+
+	if ((serv_sd = socket(PF_INET, SOCK_STREAM, 0)) < 0)
+		fail1("socket", -1);
+	if (setsockopt(serv_sd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
+		fail1("setsockopt", -1);
+
+	bzero(&servaddr, sizeof(servaddr));
+	servaddr.sin_family = AF_INET;
+	servaddr.sin_addr.s_addr = htonl(addr);
+	servaddr.sin_port = htons(port);
+
+	if (bind(serv_sd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
+		fail1("bind", -1);
+	if (listen(serv_sd, LISTENQ) < 0)
+		fail1("listen", -1);
+
+	server->loop = loop;
+	ev_io_init(&server->connection_watcher, accept_cb, serv_sd, EV_READ);
+	server->connection_watcher.data = server;
+	ev_io_start(loop, &server->connection_watcher);
+	return serv_sd;
+}
+
+void ldap_server_stop(ldap_server *server)
+{
+	assert(server->loop != NULL);
+	assert(ev_is_active(&server->connection_watcher));
+
+	ev_io_stop(server->loop, &server->connection_watcher);
+	close(server->connection_watcher.fd);
+	server->loop = NULL;
+}
+
+char *ldap_server_cn2name(ldap_server *server, const char *cn)
+{
+	/* cn=$username$,BASEDN => $username$ */
+	char *pos = index(cn, ',');
+
+	if (!pos || strncmp(cn, "cn=", 3) || strcmp(pos + 1, server->basedn))
+		return NULL;
+	return XSTRNDUP(cn + 3, pos - (cn + 3));
+}
+
 void accept_cb(ev_loop *loop, ev_io *watcher, int revents)
 {
+	ldap_server *server = watcher->data;
 	int client_sd;
 	ev_io *w_client;
+
+	assert(server->loop == loop);
+	assert(&server->connection_watcher == watcher);
 
 	if (EV_ERROR & revents)
 		fail("got invalid event");
@@ -134,8 +193,10 @@ void accept_cb(ev_loop *loop, ev_io *watcher, int revents)
 	if ((client_sd = accept(watcher->fd, NULL, NULL)) < 0)
 		fail("accept error");
 
+	/* TODO(abo): change this to use an ldap_connection later. */
 	w_client = XNEW(ev_io, 1);
 	ev_io_init(w_client, read_cb, client_sd, EV_READ);
+	w_client->data = server;
 	ev_io_start(loop, w_client);
 }
 
@@ -201,20 +262,23 @@ void delay_cb(ev_loop *loop, ev_timer *watcher, int revents)
 
 void ldap_bind(int msgid, BindRequest_t *req, ev_loop *loop, ev_io *watcher)
 {
+	ldap_server *server = watcher->data;
 	ev_tstamp delay = 0.0;
 	LDAPMessage_t *res = XNEW0(LDAPMessage_t, 1);
+
+	assert(server->loop == loop);
 
 	res->messageID = msgid;
 	res->protocolOp.present = LDAPMessage__protocolOp_PR_bindResponse;
 	BindResponse_t *bindResponse = &res->protocolOp.choice.bindResponse;
 	OCTET_STRING_fromBuf(&bindResponse->matchedDN, (const char *)req->name.buf, req->name.size);
 
-	if (setting_anonymous && req->name.size == 0) {
+	if (server->anonymous && req->name.size == 0) {
 		/* allow anonymous */
 		asn_long2INTEGER(&bindResponse->resultCode, BindResponse__resultCode_success);
 	} else if (req->authentication.present == AuthenticationChoice_PR_simple) {
 		/* simple auth */
-		char *user = cn2name((const char *)req->name.buf);
+		char *user = ldap_server_cn2name(server, (const char *)req->name.buf);
 		char *pw = (char *)req->authentication.choice.simple.buf;
 		char *status = NULL;
 		if (!user) {
@@ -249,12 +313,15 @@ void ldap_bind(int msgid, BindRequest_t *req, ev_loop *loop, ev_io *watcher)
 
 void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher)
 {
+	ldap_server *server = watcher->data;
 	/* (user=$username$) => cn=$username$,BASEDN */
 	char user[BUF_SIZE];
 	LDAPMessage_t *res = XNEW0(LDAPMessage_t, 1);
 
+	assert(server->loop == loop);
+
 	AttributeValueAssertion_t *attr = &req->filter.choice.equalityMatch;
-	int bad_dn = strcmp((const char *)req->baseObject.buf, setting_basedn)
+	int bad_dn = strcmp((const char *)req->baseObject.buf, server->basedn)
 	    && strcmp((const char *)req->baseObject.buf, "");
 	int bad_filter = req->filter.present != Filter_PR_equalityMatch
 	    || strcmp((const char *)attr->attributeDesc.buf, "user");
@@ -265,7 +332,7 @@ void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher)
 		/* result of search */
 		res->protocolOp.present = LDAPMessage__protocolOp_PR_searchResEntry;
 		SearchResultEntry_t *searchResEntry = &res->protocolOp.choice.searchResEntry;
-		snprintf(user, BUF_SIZE, "cn=%s,%s", (const char *)attr->assertionValue.buf, setting_basedn);
+		snprintf(user, BUF_SIZE, "cn=%s,%s", (const char *)attr->assertionValue.buf, server->basedn);
 		OCTET_STRING_fromString(&searchResEntry->objectName, user);
 
 		if (ldap_send(res, loop, watcher) <= 0) {
@@ -286,7 +353,7 @@ void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher)
 		OCTET_STRING_fromString(&searchResDone->diagnosticMessage, "filter not supported");
 	} else {
 		asn_long2INTEGER(&searchResDone->resultCode, LDAPResult__resultCode_success);
-		OCTET_STRING_fromString(&searchResDone->matchedDN, setting_basedn);
+		OCTET_STRING_fromString(&searchResDone->matchedDN, server->basedn);
 	}
 
 	ldap_send(res, loop, watcher);
@@ -380,16 +447,6 @@ void auth_pam_delay(int retval, unsigned usec_delay, void *appdata_ptr)
 	/* Only set the delay if the auth failed. */
 	if (PAM_SUCCESS != retval)
 		data->delay = usec_delay * 1.0e-6;
-}
-
-char *cn2name(const char *cn)
-{
-	/* cn=$username$,BASEDN => $username$ */
-	char *pos = index(cn, ',');
-
-	if (!pos || strncmp(cn, "cn=", 3) || strcmp(pos + 1, setting_basedn))
-		return NULL;
-	return XSTRNDUP(cn + 3, pos - (cn + 3));
 }
 
 void settings(int argc, char **argv)
