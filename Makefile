@@ -1,7 +1,7 @@
 CC=gcc
 CFLAGS=-Wall -Wextra -fno-strict-aliasing
 LDFLAGS=-lev -lpam
-TYPE_RE='ev_[^ ]\+\|[^ ]\+_t'
+TYPE_RE='\(ev\|ldap\)_[^ ]\+\|[^ ]\+_t'
 
 all: asn1
 	$(CC) -Iasn1/ $(CFLAGS) $(LDFLAGS) main.c asn1/*.c -o entente

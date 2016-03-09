@@ -15,9 +15,9 @@ The GNU indent tool can reformat code to comply with this.
 
 Always use typedef names instead of struct names when possible to
 minimize code noise.  Both libev and asn1c have many typedef's using
-consistant naming conventions of ev_* or *_t. We can use sed to
-automatically enforce this when the struct and typedef names are the
-same.
+consistant naming conventions of ev_* or *_t respectively. We can use
+sed to automatically enforce this when the struct and typedef names
+are the same.
 
 Indent needs a "-T typename" for every single userdefined type,
 otherwise it inserts a space between * and the indentifier on pointer
@@ -27,6 +27,51 @@ with sed.
 We add a "tidy" make target to automatically reformat all the *.c
 files. See the Makefile to see what this includes. Always run "make
 tidy" before you commit.
+
+General Architecture
+====================
+
+One of the neatest examples of how to write a libev application is the
+`libebb lightweight HTTP server library
+<http://github.com/taf2/libebb>`_. It generally copies the conventions
+and style of libev itself, making it consistent and easy to understand
+if you understand libev. We should copy the libebb style, conventions
+and architecture. This includes;
+
+* Use typedef'ed structs to implement server, connection, request, etc
+  classes. Any variables become object instances of these classes. The
+  name starts with `ldap_<class>` like `ldap_server`.
+
+* Use functions as "methods" to operate on objects. The name starts
+  with the class name and take a class pointer as the first argument
+  like `ldap_server_init(ldap_server *server, ...)`.
+
+* Every class struct has an initialize method called
+  `ldap_<class>_init()`. It completely wipes and initializes all
+  fields of the class struct.
+
+* All libev event handler callback functions are named `on_<event>()`.
+  Note libebb also has an `ebb_after_write_cb()` which defies this
+  convention and more closely matches the existing entente convention
+  of naming them `<action>_cb()`. Should non-libev-event callbacks be
+  called `<action>_cb()`? I think all callbacks are actually for an
+  event of some kind or another, so we should use `on_<event>()`
+  everywhere. What about if we need different actions for the same
+  event?
+
+* All libev watcher variables and struct fields are named
+  `<event>_watcher`. Note entente already has a less verbose
+  convention of using `w_<purpose>`. We should switch to the libebb
+  convention.
+
+* Support for gnutls is optionally enabled with `#ifdef HAVE_GNUTLS`
+  throughout the code to enable struct fields, code fragments, and
+  whole functions.
+
+* Consistently use assert statements at the start of methods that
+  assert data consistency invarients and preconditions, like
+  `assert(&server->connection_watcher == watcher)` and
+  `assert(ev_is_active(&server->connection_watcher)`
 
 Error Handling
 ==============
