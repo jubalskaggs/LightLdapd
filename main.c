@@ -38,11 +38,6 @@
 
 #define fail(msg) do { perror(msg); return; } while (0);
 #define fail1(msg, ret) do { perror(msg); return ret; } while (0);
-#define ev_close(loop, watcher) do { \
-	ev_io_stop(loop, watcher); \
-	close(watcher->fd); \
-	free(watcher); \
-} while (0)
 #define XNEW(type, n) ({void *_p=malloc(n*sizeof(type)); if (!_p) err(EX_OSERR, "malloc"); _p;})
 #define XNEW0(type, n) ({void *_p=calloc(n,sizeof(type)); if (!_p) err(EX_OSERR, "calloc"); _p;})
 #define XSTRDUP(s) ({char *_s=strdup(s); if (!_s) err(EX_OSERR, "strdup"); _s;})
@@ -62,30 +57,29 @@ typedef struct {
 	ev_loop *loop;
 	ev_io connection_watcher;
 } ldap_server;
-void ldap_server_init(ldap_server *server, char *basedn, int anonymous);
-int ldap_server_start(ldap_server *server, ev_loop *loop, uint32_t addr, int port);
+void ldap_server_init(ldap_server *server, ev_loop *loop, char *basedn, int anonymous);
+int ldap_server_start(ldap_server *server, uint32_t addr, int port);
 void ldap_server_stop(ldap_server *server);
 char *ldap_server_cn2name(ldap_server *server, const char *cn);
 
 typedef struct {
-	/* TODO(abo): Complete this and use it. */
+	ldap_server *server;
+	ev_io read_watcher;
+	ev_io write_watcher;
+	ev_timer delay_watcher;
+	LDAPMessage_t *request;
+	LDAPMessage_t *response;
 } ldap_connection;
-
-typedef struct {
-	/* TODO(abo): Complete this and use it. */
-} ldap_request;
+ldap_connection *ldap_connection_new(ldap_server *server, int fd);
+void ldap_connection_free(ldap_connection *connection);
+ssize_t ldap_connection_send(ldap_connection *connection, LDAPMessage_t *msg);
 
 void accept_cb(ev_loop *loop, ev_io *watcher, int revents);
 void read_cb(ev_loop *loop, ev_io *watcher, int revents);
-typedef struct {
-	LDAPMessage_t *message;
-	ev_io *watcher;
-} delay_data_t;
 void delay_cb(EV_P_ ev_timer *w, int revents);
 
 void ldap_bind(int msgid, BindRequest_t *req, ev_loop *loop, ev_io *watcher);
 void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher);
-ssize_t ldap_send(LDAPMessage_t *msg, ev_loop *loop, ev_io *watcher);
 
 typedef struct {
 	const char *user, *pw;
@@ -112,60 +106,53 @@ int main(int argc, char **argv)
 	server_addr = setting_loopback ? INADDR_LOOPBACK : INADDR_ANY;
 	if (setting_daemon && daemon(0, 0))
 		fail1("daemon", 1);
-	ldap_server_init(&server, setting_basedn, setting_anonymous);
-	if (ldap_server_start(&server, loop, server_addr, setting_port) < 0)
+	ldap_server_init(&server, loop, setting_basedn, setting_anonymous);
+	if (ldap_server_start(&server, server_addr, setting_port) < 0)
 		fail1("ldap_server_start", 1);
 	ev_run(loop, 0);
 	return 0;
 }
 
-void ldap_server_init(ldap_server *server, char *basedn, int anonymous)
+void ldap_server_init(ldap_server *server, ev_loop *loop, char *basedn, int anonymous)
 {
 	server->basedn = basedn;
 	server->anonymous = anonymous;
-	server->loop = NULL;
-	ev_init(&server->connection_watcher, NULL);
+	server->loop = loop;
+	ev_init(&server->connection_watcher, accept_cb);
+	server->connection_watcher.data = server;
 }
 
-int ldap_server_start(ldap_server *server, ev_loop *loop, uint32_t addr, int port)
+int ldap_server_start(ldap_server *server, uint32_t addr, int port)
 {
 	int serv_sd;
 	int opt = 1;
 	struct sockaddr_in servaddr;
 
-	assert(server->loop == NULL);
 	assert(!ev_is_active(&server->connection_watcher));
 
 	if ((serv_sd = socket(PF_INET, SOCK_STREAM, 0)) < 0)
 		fail1("socket", -1);
 	if (setsockopt(serv_sd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
 		fail1("setsockopt", -1);
-
 	bzero(&servaddr, sizeof(servaddr));
 	servaddr.sin_family = AF_INET;
 	servaddr.sin_addr.s_addr = htonl(addr);
 	servaddr.sin_port = htons(port);
-
 	if (bind(serv_sd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
 		fail1("bind", -1);
 	if (listen(serv_sd, LISTENQ) < 0)
 		fail1("listen", -1);
-
-	server->loop = loop;
-	ev_io_init(&server->connection_watcher, accept_cb, serv_sd, EV_READ);
-	server->connection_watcher.data = server;
-	ev_io_start(loop, &server->connection_watcher);
+	ev_io_set(&server->connection_watcher, serv_sd, EV_READ);
+	ev_io_start(server->loop, &server->connection_watcher);
 	return serv_sd;
 }
 
 void ldap_server_stop(ldap_server *server)
 {
-	assert(server->loop != NULL);
 	assert(ev_is_active(&server->connection_watcher));
 
 	ev_io_stop(server->loop, &server->connection_watcher);
 	close(server->connection_watcher.fd);
-	server->loop = NULL;
 }
 
 char *ldap_server_cn2name(ldap_server *server, const char *cn)
@@ -178,58 +165,94 @@ char *ldap_server_cn2name(ldap_server *server, const char *cn)
 	return XSTRNDUP(cn + 3, pos - (cn + 3));
 }
 
+ldap_connection *ldap_connection_new(ldap_server *server, int fd)
+{
+	ldap_connection *connection = XNEW0(ldap_connection, 1);
+
+	connection->server = server;
+	ev_io_init(&connection->read_watcher, read_cb, fd, EV_READ);
+	connection->read_watcher.data = connection;
+	ev_init(&connection->write_watcher, NULL);
+	connection->write_watcher.data = connection;
+	ev_init(&connection->delay_watcher, NULL);
+	connection->delay_watcher.data = connection;
+	ev_io_start(server->loop, &connection->read_watcher);
+	return connection;
+}
+
+void ldap_connection_free(ldap_connection *connection)
+{
+	assert(ev_is_active(&connection->read_watcher));
+
+	ev_io_stop(connection->server->loop, &connection->read_watcher);
+	close(connection->read_watcher.fd);
+	free(connection);
+}
+
 void accept_cb(ev_loop *loop, ev_io *watcher, int revents)
 {
 	ldap_server *server = watcher->data;
 	int client_sd;
-	ev_io *w_client;
 
 	assert(server->loop == loop);
 	assert(&server->connection_watcher == watcher);
 
 	if (EV_ERROR & revents)
 		fail("got invalid event");
-
 	if ((client_sd = accept(watcher->fd, NULL, NULL)) < 0)
 		fail("accept error");
+	ldap_connection_new(server, client_sd);
+}
 
-	/* TODO(abo): change this to use an ldap_connection later. */
-	w_client = XNEW(ev_io, 1);
-	ev_io_init(w_client, read_cb, client_sd, EV_READ);
-	w_client->data = server;
-	ev_io_start(loop, w_client);
+ssize_t ldap_connection_send(ldap_connection *connection, LDAPMessage_t *msg)
+{
+	char buf[BUF_SIZE];
+	ssize_t buf_cnt;
+	asn_enc_rval_t rencode;
+
+	assert(ev_is_active(&connection->read_watcher));
+
+	LDAP_DEBUG(msg);
+	bzero(buf, sizeof(buf));
+	rencode = der_encode_to_buffer(&asn_DEF_LDAPMessage, msg, &buf, sizeof(buf));
+	buf_cnt = write(connection->read_watcher.fd, buf, rencode.encoded);
+	if (rencode.encoded != buf_cnt) {
+		ldap_connection_free(connection);
+		perror("ldap_connection_send");
+		return -1;
+	}
+	return buf_cnt;
 }
 
 void read_cb(ev_loop *loop, ev_io *watcher, int revents)
 {
+	ldap_connection *connection = watcher->data;
+	ldap_server *server = connection->server;
 	char buf[BUF_SIZE];
 	ssize_t buf_cnt;
-
 	LDAPMessage_t *req = NULL;
 	asn_dec_rval_t rdecode;
 
+	assert(server->loop == loop);
+	assert(&connection->read_watcher == watcher);
+
 	if (EV_ERROR & revents)
 		fail("got invalid event");
-
 	bzero(buf, sizeof(buf));
 	buf_cnt = recv(watcher->fd, buf, sizeof(buf), 0);
-
 	if (buf_cnt <= 0) {
-		ev_close(loop, watcher);
+		ldap_connection_free(connection);
 		if (buf_cnt < 0)
 			fail("read");
 		return;
 	}
-
 	/* from asn1c's FAQ: If you want data to be BER or DER encoded, just invoke der_encode(). */
 	rdecode = asn_DEF_LDAPMessage.ber_decoder(0, &asn_DEF_LDAPMessage, (void **)&req, buf, buf_cnt, 0);
-
 	if (rdecode.code != RC_OK || (ssize_t) rdecode.consumed != buf_cnt) {
-		ev_close(loop, watcher);
+		ldap_connection_free(connection);
 		ldapmessage_free(req);
 		fail((rdecode.code != RC_OK) ? "der_decoder" : "consumed");
 	}
-
 	LDAP_DEBUG(req);
 	switch (req->protocolOp.present) {
 	case LDAPMessage__protocolOp_PR_bindRequest:
@@ -239,34 +262,39 @@ void read_cb(ev_loop *loop, ev_io *watcher, int revents)
 		ldap_search(req->messageID, &req->protocolOp.choice.searchRequest, loop, watcher);
 		break;
 	case LDAPMessage__protocolOp_PR_unbindRequest:
-		ev_close(loop, watcher);
+		ldap_connection_free(connection);
 		break;
 	default:
 		perror("_|_");
-		ev_close(loop, watcher);
+		ldap_connection_free(connection);
 	}
 	ldapmessage_free(req);
 }
 
 void delay_cb(ev_loop *loop, ev_timer *watcher, int revents)
 {
-	delay_data_t *data = watcher->data;
+	ldap_connection *connection = watcher->data;
+	ldap_server *server = connection->server;
+	LDAPMessage_t *res = connection->response;
 
-	/* Restart the connection watcher before calling ldap_send(), which can close it on errors. */
-	ev_io_start(loop, data->watcher);
-	ldap_send(data->message, loop, data->watcher);
-	ldapmessage_free(data->message);
-	free(data);
-	free(watcher);
+	assert(server->loop == loop);
+	assert(&connection->delay_watcher == watcher);
+
+	/* Restart the connection watcher before calling ldap_connection_send(), which can close it on errors. */
+	ev_io_start(loop, &connection->read_watcher);
+	ldap_connection_send(connection, res);
+	ldapmessage_free(res);
 }
 
 void ldap_bind(int msgid, BindRequest_t *req, ev_loop *loop, ev_io *watcher)
 {
-	ldap_server *server = watcher->data;
+	ldap_connection *connection = watcher->data;
+	ldap_server *server = connection->server;
 	ev_tstamp delay = 0.0;
 	LDAPMessage_t *res = XNEW0(LDAPMessage_t, 1);
 
 	assert(server->loop == loop);
+	assert(&connection->read_watcher == watcher);
 
 	res->messageID = msgid;
 	res->protocolOp.present = LDAPMessage__protocolOp_PR_bindResponse;
@@ -296,29 +324,28 @@ void ldap_bind(int msgid, BindRequest_t *req, ev_loop *loop, ev_io *watcher)
 		asn_long2INTEGER(&bindResponse->resultCode, BindResponse__resultCode_authMethodNotSupported);
 	}
 	if (delay > 0.0) {
-		ev_timer *delay_timer = XNEW(ev_timer, 1);
-		delay_data_t *data = XNEW(delay_data_t, 1);
-		data->message = res;
-		data->watcher = watcher;
-		ev_timer_init(delay_timer, delay_cb, delay, 0.0);
-		delay_timer->data = data;
-		/* Stop the connection watcher to stop other requests while delayed. */
+		connection->response = res;
+		ev_timer_init(&connection->delay_watcher, delay_cb, delay, 0.0);
+		connection->delay_watcher.data = connection;
+		/* Stop the connection read_watcher to stop other requests while delayed. */
 		ev_io_stop(loop, watcher);
-		ev_timer_start(loop, delay_timer);
+		ev_timer_start(loop, &connection->delay_watcher);
 	} else {
-		ldap_send(res, loop, watcher);
+		ldap_connection_send(connection, res);
 		ldapmessage_free(res);
 	}
 }
 
 void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher)
 {
-	ldap_server *server = watcher->data;
+	ldap_connection *connection = watcher->data;
+	ldap_server *server = connection->server;
 	/* (user=$username$) => cn=$username$,BASEDN */
 	char user[BUF_SIZE];
 	LDAPMessage_t *res = XNEW0(LDAPMessage_t, 1);
 
 	assert(server->loop == loop);
+	assert(&connection->read_watcher == watcher);
 
 	AttributeValueAssertion_t *attr = &req->filter.choice.equalityMatch;
 	int bad_dn = strcmp((const char *)req->baseObject.buf, server->basedn)
@@ -335,7 +362,7 @@ void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher)
 		snprintf(user, BUF_SIZE, "cn=%s,%s", (const char *)attr->assertionValue.buf, server->basedn);
 		OCTET_STRING_fromString(&searchResEntry->objectName, user);
 
-		if (ldap_send(res, loop, watcher) <= 0) {
+		if (ldap_connection_send(connection, res) <= 0) {
 			ldapmessage_free(res);
 			return;
 		}
@@ -356,28 +383,8 @@ void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher)
 		OCTET_STRING_fromString(&searchResDone->matchedDN, server->basedn);
 	}
 
-	ldap_send(res, loop, watcher);
+	ldap_connection_send(connection, res);
 	ldapmessage_free(res);
-}
-
-ssize_t ldap_send(LDAPMessage_t *msg, ev_loop *loop, ev_io *watcher)
-{
-	char buf[BUF_SIZE];
-	ssize_t buf_cnt;
-	asn_enc_rval_t rencode;
-
-	LDAP_DEBUG(msg);
-
-	bzero(buf, sizeof(buf));
-	rencode = der_encode_to_buffer(&asn_DEF_LDAPMessage, msg, &buf, sizeof(buf));
-	buf_cnt = write(watcher->fd, buf, rencode.encoded);
-
-	if (rencode.encoded != buf_cnt) {
-		ev_close(loop, watcher);
-		perror("ldap_send");
-		return -1;
-	}
-	return buf_cnt;
 }
 
 int auth_pam(const char *user, const char *pw, char **msg, ev_tstamp *delay)
