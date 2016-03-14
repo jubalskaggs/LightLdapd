@@ -34,7 +34,6 @@
 #include "asn1/LDAPMessage.h"
 
 #define LISTENQ 128
-#define BUF_SIZE 16384
 
 #define fail(msg) do { perror(msg); return; } while (0);
 #define fail1(msg, ret) do { perror(msg); return ret; } while (0);
@@ -50,6 +49,20 @@
 #else
 #define LDAP_DEBUG(msg)
 #endif
+
+#define BUFFER_SIZE 16384
+typedef struct {
+	char buf[BUFFER_SIZE];
+	size_t len;
+} buffer_t;
+void buffer_init(buffer_t *buffer);
+void buffer_appended(buffer_t *buffer, size_t len);
+void buffer_consumed(buffer_t *buffer, size_t len);
+#define buffer_wpos(buffer) ((buffer)->buf + (buffer)->len)
+#define buffer_wlen(buffer) (BUFFER_SIZE - (buffer)->len)
+#define buffer_rpos(buffer) ((buffer)->buf)
+#define buffer_rlen(buffer) ((buffer)->len)
+#define buffer_empty(buffer) (!(buffer)->len)
 
 typedef struct {
 	char *basedn;
@@ -69,6 +82,8 @@ typedef struct {
 	ev_timer delay_watcher;
 	LDAPMessage_t *request;
 	LDAPMessage_t *response;
+	buffer_t recv_buf;
+	buffer_t send_buf;
 } ldap_connection;
 ldap_connection *ldap_connection_new(ldap_server *server, int fd);
 void ldap_connection_free(ldap_connection *connection);
@@ -111,6 +126,29 @@ int main(int argc, char **argv)
 		fail1("ldap_server_start", 1);
 	ev_run(loop, 0);
 	return 0;
+}
+
+void buffer_init(buffer_t *buffer)
+{
+	buffer->len = 0;
+}
+
+void buffer_appended(buffer_t *buffer, size_t len)
+{
+	assert(len <= buffer_wlen(buffer));
+
+	buffer->len += len;
+}
+
+void buffer_consumed(buffer_t *buffer, size_t len)
+{
+	assert(len <= buffer_rlen(buffer));
+
+	buffer->len -= len;
+	/* Shuffle any remaining data to start of buffer. */
+	if (buffer->len) {
+		memmove(buffer->buf, buffer->buf + len, buffer->len);
+	}
 }
 
 void ldap_server_init(ldap_server *server, ev_loop *loop, char *basedn, int anonymous)
@@ -176,6 +214,8 @@ ldap_connection *ldap_connection_new(ldap_server *server, int fd)
 	connection->write_watcher.data = connection;
 	ev_init(&connection->delay_watcher, NULL);
 	connection->delay_watcher.data = connection;
+	buffer_init(&connection->recv_buf);
+	buffer_init(&connection->send_buf);
 	ev_io_start(server->loop, &connection->read_watcher);
 	return connection;
 }
@@ -191,21 +231,22 @@ void ldap_connection_free(ldap_connection *connection)
 
 ssize_t ldap_connection_send(ldap_connection *connection, LDAPMessage_t *msg)
 {
-	char buf[BUF_SIZE];
+	buffer_t *buf = &connection->send_buf;
 	ssize_t buf_cnt;
 	asn_enc_rval_t rencode;
 
 	assert(ev_is_active(&connection->read_watcher));
 
 	LDAP_DEBUG(msg);
-	bzero(buf, sizeof(buf));
-	rencode = der_encode_to_buffer(&asn_DEF_LDAPMessage, msg, &buf, sizeof(buf));
-	buf_cnt = write(connection->read_watcher.fd, buf, rencode.encoded);
+	rencode = der_encode_to_buffer(&asn_DEF_LDAPMessage, msg, buffer_wpos(buf), buffer_wlen(buf));
+	buffer_appended(buf, rencode.encoded);
+	buf_cnt = write(connection->read_watcher.fd, buffer_rpos(buf), buffer_rlen(buf));
 	if (rencode.encoded != buf_cnt) {
 		ldap_connection_free(connection);
 		perror("ldap_connection_send");
 		return -1;
 	}
+	buffer_consumed(buf, buf_cnt);
 	return buf_cnt;
 }
 
@@ -228,7 +269,7 @@ void read_cb(ev_loop *loop, ev_io *watcher, int revents)
 {
 	ldap_connection *connection = watcher->data;
 	ldap_server *server = connection->server;
-	char buf[BUF_SIZE];
+	buffer_t *buf = &connection->recv_buf;
 	ssize_t buf_cnt;
 	LDAPMessage_t *req = NULL;
 	asn_dec_rval_t rdecode;
@@ -238,16 +279,17 @@ void read_cb(ev_loop *loop, ev_io *watcher, int revents)
 
 	if (EV_ERROR & revents)
 		fail("got invalid event");
-	bzero(buf, sizeof(buf));
-	buf_cnt = recv(watcher->fd, buf, sizeof(buf), 0);
+	buf_cnt = recv(watcher->fd, buffer_wpos(buf), buffer_wlen(buf), 0);
 	if (buf_cnt <= 0) {
 		ldap_connection_free(connection);
 		if (buf_cnt < 0)
 			fail("read");
 		return;
 	}
+	buffer_appended(buf, buf_cnt);
 	/* from asn1c's FAQ: If you want data to be BER or DER encoded, just invoke der_encode(). */
-	rdecode = asn_DEF_LDAPMessage.ber_decoder(0, &asn_DEF_LDAPMessage, (void **)&req, buf, buf_cnt, 0);
+	rdecode = ber_decode(0, &asn_DEF_LDAPMessage, (void **)&req, buffer_rpos(buf), buffer_rlen(buf));
+	buffer_consumed(buf, rdecode.consumed);
 	if (rdecode.code != RC_OK || (ssize_t) rdecode.consumed != buf_cnt) {
 		ldap_connection_free(connection);
 		ldapmessage_free(req);
@@ -341,7 +383,7 @@ void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher)
 	ldap_connection *connection = watcher->data;
 	ldap_server *server = connection->server;
 	/* (user=$username$) => cn=$username$,BASEDN */
-	char user[BUF_SIZE];
+	char user[256];
 	LDAPMessage_t *res = XNEW0(LDAPMessage_t, 1);
 
 	assert(server->loop == loop);
@@ -359,7 +401,7 @@ void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher)
 		/* result of search */
 		res->protocolOp.present = LDAPMessage__protocolOp_PR_searchResEntry;
 		SearchResultEntry_t *searchResEntry = &res->protocolOp.choice.searchResEntry;
-		snprintf(user, BUF_SIZE, "cn=%s,%s", (const char *)attr->assertionValue.buf, server->basedn);
+		snprintf(user, sizeof(user), "cn=%s,%s", (const char *)attr->assertionValue.buf, server->basedn);
 		OCTET_STRING_fromString(&searchResEntry->objectName, user);
 
 		if (ldap_connection_send(connection, res) <= 0) {
@@ -389,7 +431,7 @@ void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher)
 
 int auth_pam(const char *user, const char *pw, char **msg, ev_tstamp *delay)
 {
-	char status[BUF_SIZE] = "";
+	char status[256] = "";
 	int pam_res = -1;
 	auth_pam_data_t data;
 	struct pam_conv conv_info;
@@ -402,17 +444,20 @@ int auth_pam(const char *user, const char *pw, char **msg, ev_tstamp *delay)
 	conv_info.appdata_ptr = (void *)&data;
 	/* Start pam. */
 	if (PAM_SUCCESS != (pam_res = pam_start("entente", user, &conv_info, &pamh))) {
-		sprintf(status, "PAM: Could not start pam service: %s\n", pam_strerror(pamh, pam_res));
+		snprintf(status, sizeof(status), "PAM: Could not start pam service: %s\n", pam_strerror(pamh, pam_res));
 	} else {
 		/* Set failure delay handler function. */
 		if (PAM_SUCCESS != (pam_res = pam_set_item(pamh, PAM_FAIL_DELAY, &auth_pam_delay)))
-			sprintf(status, "PAM: Could not set failure delay handler: %s\n", pam_strerror(pamh, pam_res));
+			snprintf(status, sizeof(status), "PAM: Could not set failure delay handler: %s\n",
+				 pam_strerror(pamh, pam_res));
 		/* Try auth. */
 		else if (PAM_SUCCESS != (pam_res = pam_authenticate(pamh, PAM_DISALLOW_NULL_AUTHTOK)))
-			sprintf(status, "PAM: user %s - not authenticated: %s\n", user, pam_strerror(pamh, pam_res));
+			snprintf(status, sizeof(status), "PAM: user %s - not authenticated: %s\n", user,
+				 pam_strerror(pamh, pam_res));
 		/* Check that the account is healthy. */
 		else if (PAM_SUCCESS != (pam_res = pam_acct_mgmt(pamh, PAM_DISALLOW_NULL_AUTHTOK)))
-			sprintf(status, "PAM: user %s - invalid account: %s", user, pam_strerror(pamh, pam_res));
+			snprintf(status, sizeof(status), "PAM: user %s - invalid account: %s", user,
+				 pam_strerror(pamh, pam_res));
 		pam_end(pamh, PAM_SUCCESS);
 	}
 	*msg = XSTRDUP(status);
