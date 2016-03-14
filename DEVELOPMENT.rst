@@ -10,24 +10,32 @@ these procedures.
 Testing
 =======
 
-When running entente for tesing use;
+To build entente with debug output turned on use::
 
-sudo ./entente -l -a
+  make debug
 
-When searching with ldapsearch, you should use;
+When running entente for tesing use::
 
-ldapsearch "user=abo" -b "dc=entente" -h localhost -v -x -D "cn=abo,dc=entente" -W
+  sudo ./entente -l -a
 
--b is base DN
--h is the host
--v is verbose output
--x is simple bind
--D is bind DN
--W is prompt for passwd
+When searching with ldapsearch, you should use::
 
-Without -b it uses the default from /etc/ldap/ldap.conf
-Without -D and -W it does an anonymous bind.
-With -D "" it also does an anonymous bind.
+  ldapsearch "user=abo" -b "dc=entente" -h localhost -v -x -D "cn=abo,dc=entente" -W
+
+Where the arguments provided are:
+
+  -b DN  is the base DN to use.
+  -h host  is the host to use.
+  -v  is for verbose output.
+  -x  is to use simple bind.
+  -D DN  is the bind DN to use.
+  -W  is to prompt for passwd.
+
+Without ``-b`` it uses the default from ``/etc/ldap/ldap.conf``.
+
+Without ``-D`` and ``-W`` it does an anonymous bind.
+
+With ``-D ""`` it also does an anonymous bind.
 
 Coding Style
 ============
