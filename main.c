@@ -189,21 +189,6 @@ void ldap_connection_free(ldap_connection *connection)
 	free(connection);
 }
 
-void accept_cb(ev_loop *loop, ev_io *watcher, int revents)
-{
-	ldap_server *server = watcher->data;
-	int client_sd;
-
-	assert(server->loop == loop);
-	assert(&server->connection_watcher == watcher);
-
-	if (EV_ERROR & revents)
-		fail("got invalid event");
-	if ((client_sd = accept(watcher->fd, NULL, NULL)) < 0)
-		fail("accept error");
-	ldap_connection_new(server, client_sd);
-}
-
 ssize_t ldap_connection_send(ldap_connection *connection, LDAPMessage_t *msg)
 {
 	char buf[BUF_SIZE];
@@ -222,6 +207,21 @@ ssize_t ldap_connection_send(ldap_connection *connection, LDAPMessage_t *msg)
 		return -1;
 	}
 	return buf_cnt;
+}
+
+void accept_cb(ev_loop *loop, ev_io *watcher, int revents)
+{
+	ldap_server *server = watcher->data;
+	int client_sd;
+
+	assert(server->loop == loop);
+	assert(&server->connection_watcher == watcher);
+
+	if (EV_ERROR & revents)
+		fail("got invalid event");
+	if ((client_sd = accept(watcher->fd, NULL, NULL)) < 0)
+		fail("accept error");
+	ldap_connection_new(server, client_sd);
 }
 
 void read_cb(ev_loop *loop, ev_io *watcher, int revents)
