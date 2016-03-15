@@ -94,8 +94,8 @@ void read_cb(ev_loop *loop, ev_io *watcher, int revents);
 void write_cb(ev_loop *loop, ev_io *watcher, int revents);
 void delay_cb(EV_P_ ev_timer *w, int revents);
 
-void ldap_bind(int msgid, BindRequest_t *req, ev_loop *loop, ev_io *watcher);
-void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher);
+void ldap_request_bind(ldap_connection *connection, int msgid, BindRequest_t *req);
+void ldap_request_search(ldap_connection *connection, int msgid, SearchRequest_t *req);
 
 typedef struct {
 	const char *user, *pw;
@@ -213,7 +213,7 @@ ldap_connection *ldap_connection_new(ldap_server *server, int fd)
 	connection->read_watcher.data = connection;
 	ev_io_init(&connection->write_watcher, write_cb, fd, EV_WRITE);
 	connection->write_watcher.data = connection;
-	ev_init(&connection->delay_watcher, NULL);
+	ev_init(&connection->delay_watcher, delay_cb);
 	connection->delay_watcher.data = connection;
 	buffer_init(&connection->recv_buf);
 	buffer_init(&connection->send_buf);
@@ -288,10 +288,10 @@ void read_cb(ev_loop *loop, ev_io *watcher, int revents)
 	LDAP_DEBUG(req);
 	switch (req->protocolOp.present) {
 	case LDAPMessage__protocolOp_PR_bindRequest:
-		ldap_bind(req->messageID, &req->protocolOp.choice.bindRequest, loop, watcher);
+		ldap_request_bind(connection, req->messageID, &req->protocolOp.choice.bindRequest);
 		break;
 	case LDAPMessage__protocolOp_PR_searchRequest:
-		ldap_search(req->messageID, &req->protocolOp.choice.searchRequest, loop, watcher);
+		ldap_request_search(connection, req->messageID, &req->protocolOp.choice.searchRequest);
 		break;
 	case LDAPMessage__protocolOp_PR_unbindRequest:
 		ldap_connection_free(connection);
@@ -336,15 +336,11 @@ void delay_cb(ev_loop *loop, ev_timer *watcher, int revents)
 	ev_io_start(loop, &connection->read_watcher);
 }
 
-void ldap_bind(int msgid, BindRequest_t *req, ev_loop *loop, ev_io *watcher)
+void ldap_request_bind(ldap_connection *connection, int msgid, BindRequest_t *req)
 {
-	ldap_connection *connection = watcher->data;
 	ldap_server *server = connection->server;
 	ev_tstamp delay = 0.0;
 	LDAPMessage_t *res = XNEW0(LDAPMessage_t, 1);
-
-	assert(server->loop == loop);
-	assert(&connection->read_watcher == watcher);
 
 	res->messageID = msgid;
 	res->protocolOp.present = LDAPMessage__protocolOp_PR_bindResponse;
@@ -375,27 +371,22 @@ void ldap_bind(int msgid, BindRequest_t *req, ev_loop *loop, ev_io *watcher)
 	}
 	if (delay > 0.0) {
 		connection->response = res;
-		ev_timer_init(&connection->delay_watcher, delay_cb, delay, 0.0);
-		connection->delay_watcher.data = connection;
+		ev_timer_set(&connection->delay_watcher, delay, 0.0);
 		/* Stop the connection read_watcher to stop other requests while delayed. */
-		ev_io_stop(loop, watcher);
-		ev_timer_start(loop, &connection->delay_watcher);
+		ev_io_stop(server->loop, &connection->read_watcher);
+		ev_timer_start(server->loop, &connection->delay_watcher);
 	} else {
 		ldap_connection_send(connection, res);
 		ldapmessage_free(res);
 	}
 }
 
-void ldap_search(int msgid, SearchRequest_t *req, ev_loop *loop, ev_io *watcher)
+void ldap_request_search(ldap_connection *connection, int msgid, SearchRequest_t *req)
 {
-	ldap_connection *connection = watcher->data;
 	ldap_server *server = connection->server;
 	/* (user=$username$) => cn=$username$,BASEDN */
 	char user[256];
 	LDAPMessage_t *res = XNEW0(LDAPMessage_t, 1);
-
-	assert(server->loop == loop);
-	assert(&connection->read_watcher == watcher);
 
 	AttributeValueAssertion_t *attr = &req->filter.choice.equalityMatch;
 	int bad_dn = strcmp((const char *)req->baseObject.buf, server->basedn)
