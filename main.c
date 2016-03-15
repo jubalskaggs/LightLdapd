@@ -315,7 +315,7 @@ void write_cb(ev_loop *loop, ev_io *watcher, int revents)
 	buf_cnt = send(watcher->fd, buffer_rpos(buf), buffer_rlen(buf), MSG_NOSIGNAL);
 	if (buf_cnt < 0) {
 		ldap_connection_free(connection);
-		fail("write");
+		fail("send");
 	}
 	buffer_consumed(buf, buf_cnt);
 	if (buffer_empty(buf))
