@@ -226,6 +226,8 @@ void ldap_connection_free(ldap_connection *connection)
 	assert(ev_is_active(&connection->read_watcher));
 
 	ev_io_stop(connection->server->loop, &connection->read_watcher);
+	ev_io_stop(connection->server->loop, &connection->write_watcher);
+	ev_timer_stop(connection->server->loop, &connection->delay_watcher);
 	close(connection->read_watcher.fd);
 	free(connection);
 }
