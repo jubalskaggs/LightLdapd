@@ -325,10 +325,9 @@ void write_cb(ev_loop *loop, ev_io *watcher, int revents)
 void delay_cb(ev_loop *loop, ev_timer *watcher, int revents)
 {
 	ldap_connection *connection = watcher->data;
-	ldap_server *server = connection->server;
 	LDAPMessage_t *res = connection->response;
 
-	assert(server->loop == loop);
+	assert(connection->server->loop == loop);
 	assert(&connection->delay_watcher == watcher);
 
 	ldap_connection_send(connection, res);
