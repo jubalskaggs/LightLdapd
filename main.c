@@ -420,25 +420,25 @@ ldap_status_t ldap_request_bind(ldap_connection *connection, int msgid, BindRequ
 	OCTET_STRING_fromBuf(&bindResponse->matchedDN, (const char *)req->name.buf, req->name.size);
 	if (server->anonymous && req->name.size == 0) {
 		/* allow anonymous */
-		asn_long2INTEGER(&bindResponse->resultCode, BindResponse__resultCode_success);
+		bindResponse->resultCode = BindResponse__resultCode_success;
 	} else if (req->authentication.present == AuthenticationChoice_PR_simple) {
 		/* simple auth */
 		char *user = ldap_server_cn2name(server, (const char *)req->name.buf);
 		char *pw = (char *)req->authentication.choice.simple.buf;
 		char *status = NULL;
 		if (!user) {
-			asn_long2INTEGER(&bindResponse->resultCode, BindResponse__resultCode_invalidDNSyntax);
+			bindResponse->resultCode = BindResponse__resultCode_invalidDNSyntax;
 		} else if (PAM_SUCCESS != auth_pam(user, pw, &status, &delay)) {
-			asn_long2INTEGER(&bindResponse->resultCode, BindResponse__resultCode_invalidCredentials);
+			bindResponse->resultCode = BindResponse__resultCode_invalidCredentials;
 			OCTET_STRING_fromString(&bindResponse->diagnosticMessage, status);
 		} else {	/* Success! */
-			asn_long2INTEGER(&bindResponse->resultCode, BindResponse__resultCode_success);
+			bindResponse->resultCode = BindResponse__resultCode_success;
 		}
 		free(user);
 		free(status);
 	} else {
 		/* sasl or anonymous auth */
-		asn_long2INTEGER(&bindResponse->resultCode, BindResponse__resultCode_authMethodNotSupported);
+		bindResponse->resultCode = BindResponse__resultCode_authMethodNotSupported;
 	}
 	/* If delay was set, pause response by starting delay watcher. */
 	if (delay > 0.0) {
@@ -487,15 +487,15 @@ ldap_status_t ldap_request_search(ldap_connection *connection, int msgid, Search
 				res->protocolOp.present = LDAPMessage__protocolOp_PR_searchResDone;
 				SearchResultDone_t *searchResDone = &res->protocolOp.choice.searchResDone;
 				if (bad_dn) {
-					asn_long2INTEGER(&searchResDone->resultCode, LDAPResult__resultCode_other);
+					searchResDone->resultCode = LDAPResult__resultCode_other;
 					OCTET_STRING_fromString(&searchResDone->diagnosticMessage,
 								"baseobject is invalid");
 				} else if (bad_filter) {
-					asn_long2INTEGER(&searchResDone->resultCode, LDAPResult__resultCode_other);
+					searchResDone->resultCode = LDAPResult__resultCode_other;
 					OCTET_STRING_fromString(&searchResDone->diagnosticMessage,
 								"filter not supported");
 				} else {
-					asn_long2INTEGER(&searchResDone->resultCode, LDAPResult__resultCode_success);
+					searchResDone->resultCode = LDAPResult__resultCode_success;
 					OCTET_STRING_fromString(&searchResDone->matchedDN, server->basedn);
 				}
 				connection->response_stage = 2;
