@@ -486,6 +486,8 @@ ldap_status_t ldap_request_search(ldap_connection *connection, int msgid, Search
 				/* Otherwise construct a SearchResultDone. */
 				res->protocolOp.present = LDAPMessage__protocolOp_PR_searchResDone;
 				SearchResultDone_t *searchResDone = &res->protocolOp.choice.searchResDone;
+				/* Zero searchResDone to wipe remnants of searchResEntry */
+				memset(searchResDone, 0, sizeof(SearchResultDone_t));
 				if (bad_dn) {
 					searchResDone->resultCode = LDAPResult__resultCode_other;
 					OCTET_STRING_fromString(&searchResDone->diagnosticMessage,
