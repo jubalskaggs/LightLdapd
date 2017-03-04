@@ -6,7 +6,7 @@ TYPE_RE='\(ev\|ldap\)_[^ ]\+\|[^ ]\+_t'
 .PHONY: all debug clean install debian debclean tidy
 
 all: asn1
-	$(CC) -Iasn1/ $(CFLAGS) $(LDFLAGS) main.c asn1/*.c -o entente
+	$(CC) -Iasn1/ $(CFLAGS) $(LDFLAGS) main.c pam.c asn1/*.c -o entente
 
 asn1:
 	mkdir asn1 && ( cd asn1; asn1c -pdu=auto -fcompound-names ../ldap.asn1; rm converter-sample.c )
