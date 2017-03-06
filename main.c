@@ -5,13 +5,9 @@
  * Licensed under the MIT License. See LICENSE file for details.
  */
 
-#include <stdio.h>
+#include "utils.h"
 #include <unistd.h>
-#include <stdlib.h>
-#include <err.h>
-#include <sysexits.h>
 #include <netinet/in.h>
-#include <strings.h>
 #define EV_COMPAT3 0		/* Use the ev 4.X API. */
 #include <ev.h>
 #include "asn1/LDAPMessage.h"
@@ -19,12 +15,6 @@
 
 #define LISTENQ 128
 
-#define fail(msg) do { perror(msg); return; } while (0);
-#define fail1(msg, ret) do { perror(msg); return ret; } while (0);
-#define XNEW(type, n) ({void *_p=malloc(n*sizeof(type)); if (!_p) err(EX_OSERR, "malloc"); _p;})
-#define XNEW0(type, n) ({void *_p=calloc(n,sizeof(type)); if (!_p) err(EX_OSERR, "calloc"); _p;})
-#define XSTRDUP(s) ({char *_s=strdup(s); if (!_s) err(EX_OSERR, "strdup"); _s;})
-#define XSTRNDUP(s, n) ({char *_s=strndup(s,n); if (!_s) err(EX_OSERR, "strndup"); _s;})
 #define ldapmessage_free(msg) ASN_STRUCT_FREE(asn_DEF_LDAPMessage, msg)
 #define ldapmessage_empty(msg) ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_LDAPMessage, msg)
 
@@ -161,7 +151,7 @@ int ldap_server_start(ldap_server *server, uint32_t addr, int port)
 		fail1("socket", -1);
 	if (setsockopt(serv_sd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
 		fail1("setsockopt", -1);
-	bzero(&servaddr, sizeof(servaddr));
+	memset(&servaddr, 0, sizeof(servaddr));
 	servaddr.sin_family = AF_INET;
 	servaddr.sin_addr.s_addr = htonl(addr);
 	servaddr.sin_port = htons(port);
@@ -185,7 +175,7 @@ void ldap_server_stop(ldap_server *server)
 char *ldap_server_cn2name(ldap_server *server, const char *cn)
 {
 	/* cn=$username$,BASEDN => $username$ */
-	char *pos = index(cn, ',');
+	char *pos = strchr(cn, ',');
 
 	if (!pos || strncmp(cn, "cn=", 3) || strcmp(pos + 1, server->basedn))
 		return NULL;

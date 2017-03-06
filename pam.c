@@ -5,14 +5,7 @@
  */
 
 #include "pam.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <err.h>
-#include <sysexits.h>
-
-#define XNEW0(type, n) ({void *_p=calloc(n,sizeof(type)); if (!_p) err(EX_OSERR, "calloc"); _p;})
-#define XSTRDUP(s) ({char *_s=strdup(s); if (!_s) err(EX_OSERR, "strdup"); _s;})
+#include "utils.h"
 
 typedef struct {
 	const char *user, *pw;
