@@ -10,19 +10,10 @@
 #include <netinet/in.h>
 #define EV_COMPAT3 0		/* Use the ev 4.X API. */
 #include <ev.h>
-#include "asn1/LDAPMessage.h"
 #include "pam.h"
+#include "nss2ldap.h"
 
 #define LISTENQ 128
-
-#define ldapmessage_free(msg) ASN_STRUCT_FREE(asn_DEF_LDAPMessage, msg)
-#define ldapmessage_empty(msg) ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_LDAPMessage, msg)
-
-#ifdef DEBUG
-#define LDAP_DEBUG(msg) asn_fprint(stdout, &asn_DEF_LDAPMessage, msg)
-#else
-#define LDAP_DEBUG(msg)
-#endif
 
 #define BUFFER_SIZE 16384
 typedef struct {
@@ -48,7 +39,6 @@ typedef struct {
 void ldap_server_init(ldap_server *server, ev_loop *loop, char *basedn, int anonymous);
 int ldap_server_start(ldap_server *server, uint32_t addr, int port);
 void ldap_server_stop(ldap_server *server);
-char *ldap_server_cn2name(ldap_server *server, const char *cn);
 
 /* Reuse the ber_decode return value enum as the ldap recv/send status. */
 typedef enum asn_dec_rval_code_e ldap_status_t;
@@ -170,16 +160,6 @@ void ldap_server_stop(ldap_server *server)
 
 	ev_io_stop(server->loop, &server->connection_watcher);
 	close(server->connection_watcher.fd);
-}
-
-char *ldap_server_cn2name(ldap_server *server, const char *cn)
-{
-	/* cn=$username$,BASEDN => $username$ */
-	char *pos = strchr(cn, ',');
-
-	if (!pos || strncmp(cn, "cn=", 3) || strcmp(pos + 1, server->basedn))
-		return NULL;
-	return XSTRNDUP(cn + 3, pos - (cn + 3));
 }
 
 ldap_connection *ldap_connection_new(ldap_server *server, int fd)
@@ -389,10 +369,10 @@ ldap_status_t ldap_request_bind(ldap_connection *connection, int msgid, BindRequ
 		bindResponse->resultCode = BindResponse__resultCode_success;
 	} else if (req->authentication.present == AuthenticationChoice_PR_simple) {
 		/* simple auth */
-		char *user = ldap_server_cn2name(server, (const char *)req->name.buf);
+		char user[PWNAME_MAX];
 		char *pw = (char *)req->authentication.choice.simple.buf;
 		char *status = NULL;
-		if (!user) {
+		if (!dn2name(server->basedn, (const char *)req->name.buf, user)) {
 			bindResponse->resultCode = BindResponse__resultCode_invalidDNSyntax;
 		} else if (PAM_SUCCESS != auth_pam(user, pw, &status, &delay)) {
 			bindResponse->resultCode = BindResponse__resultCode_invalidCredentials;
@@ -400,7 +380,6 @@ ldap_status_t ldap_request_bind(ldap_connection *connection, int msgid, BindRequ
 		} else {	/* Success! */
 			bindResponse->resultCode = BindResponse__resultCode_success;
 		}
-		free(user);
 		free(status);
 	} else {
 		/* sasl or anonymous auth */
@@ -420,40 +399,36 @@ ldap_status_t ldap_request_search(ldap_connection *connection, int msgid, Search
 	ldap_server *server = connection->server;
 	LDAPMessage_t *res = connection->response;
 	ldap_status_t status = RC_WMORE;
-	/* (user=$username$) => cn=$username$,BASEDN */
-	char user[256];
 	/* Check that it's a valid search request. */
 	AttributeValueAssertion_t *attr = &req->filter.choice.equalityMatch;
-	int bad_dn = strcmp((const char *)req->baseObject.buf, server->basedn)
+	const int bad_dn = strcmp((const char *)req->baseObject.buf, server->basedn)
 	    && strcmp((const char *)req->baseObject.buf, "");
-	int bad_filter = req->filter.present != Filter_PR_equalityMatch
-	    || strcmp((const char *)attr->attributeDesc.buf, "user");
+	const int bad_filter = req->filter.present != Filter_PR_equalityMatch
+	    || strcmp((const char *)attr->attributeDesc.buf, "uid");
+        const char *user = (char *)attr->assertionValue.buf;
 
 	if (connection->response_stage == 0) {
 		/* Allocate the response. */
 		res = connection->response = XNEW0(LDAPMessage_t, 1);
-		res->messageID = msgid;
 		status = RC_OK;
 	}
 	do {
 		/* If we need to, create a new response. */
 		if (status == RC_OK) {
-			/* Empty the response message. */
+			/* Empty and wipe the response message. */
 			ldapmessage_empty(res);
-			if (connection->response_stage == 0 && !bad_dn && !bad_filter) {
-				/* If the request is good and we haven't sent one yet, construct a SearchResultEntry. */
-				res->protocolOp.present = LDAPMessage__protocolOp_PR_searchResEntry;
-				SearchResultEntry_t *searchResEntry = &res->protocolOp.choice.searchResEntry;
-				snprintf(user, sizeof(user), "cn=%s,%s", (const char *)attr->assertionValue.buf,
-					 server->basedn);
-				OCTET_STRING_fromString(&searchResEntry->objectName, user);
+			memset(res, 0, sizeof(*res));
+			res->messageID = msgid;
+			res->protocolOp.present = LDAPMessage__protocolOp_PR_searchResEntry;
+			SearchResultEntry_t *searchResEntry = &res->protocolOp.choice.searchResEntry;
+			if (connection->response_stage == 0 && !bad_dn && !bad_filter &&
+			    getpwnam2ldap(searchResEntry, server->basedn, user) != -1) {
+				/* If the request is good and we found an entry, send it. */
 				connection->response_stage = 1;
 			} else {
 				/* Otherwise construct a SearchResultDone. */
 				res->protocolOp.present = LDAPMessage__protocolOp_PR_searchResDone;
 				SearchResultDone_t *searchResDone = &res->protocolOp.choice.searchResDone;
-				/* Zero searchResDone to wipe remnants of searchResEntry */
-				memset(searchResDone, 0, sizeof(SearchResultDone_t));
 				if (bad_dn) {
 					searchResDone->resultCode = LDAPResult__resultCode_other;
 					OCTET_STRING_fromString(&searchResDone->diagnosticMessage,
