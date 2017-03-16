@@ -363,7 +363,7 @@ ldap_status_t ldap_request_bind(ldap_connection *connection, int msgid, BindRequ
 	res->messageID = msgid;
 	res->protocolOp.present = LDAPMessage__protocolOp_PR_bindResponse;
 	BindResponse_t *bindResponse = &res->protocolOp.choice.bindResponse;
-	OCTET_STRING_fromBuf(&bindResponse->matchedDN, (const char *)req->name.buf, req->name.size);
+	LDAPString_set(&bindResponse->matchedDN, (const char *)req->name.buf);
 	if (server->anonymous && req->name.size == 0) {
 		/* allow anonymous */
 		bindResponse->resultCode = BindResponse__resultCode_success;
@@ -376,7 +376,7 @@ ldap_status_t ldap_request_bind(ldap_connection *connection, int msgid, BindRequ
 			bindResponse->resultCode = BindResponse__resultCode_invalidDNSyntax;
 		} else if (PAM_SUCCESS != auth_pam(user, pw, &status, &delay)) {
 			bindResponse->resultCode = BindResponse__resultCode_invalidCredentials;
-			OCTET_STRING_fromString(&bindResponse->diagnosticMessage, status);
+			LDAPString_set(&bindResponse->diagnosticMessage, status);
 		} else {	/* Success! */
 			bindResponse->resultCode = BindResponse__resultCode_success;
 		}
@@ -431,15 +431,13 @@ ldap_status_t ldap_request_search(ldap_connection *connection, int msgid, Search
 				SearchResultDone_t *searchResDone = &res->protocolOp.choice.searchResDone;
 				if (bad_dn) {
 					searchResDone->resultCode = LDAPResult__resultCode_other;
-					OCTET_STRING_fromString(&searchResDone->diagnosticMessage,
-								"baseobject is invalid");
+					LDAPString_set(&searchResDone->diagnosticMessage, "baseobject is invalid");
 				} else if (bad_filter) {
 					searchResDone->resultCode = LDAPResult__resultCode_other;
-					OCTET_STRING_fromString(&searchResDone->diagnosticMessage,
-								"filter not supported");
+					LDAPString_set(&searchResDone->diagnosticMessage, "filter not supported");
 				} else {
 					searchResDone->resultCode = LDAPResult__resultCode_success;
-					OCTET_STRING_fromString(&searchResDone->matchedDN, server->basedn);
+					LDAPString_set(&searchResDone->matchedDN, server->basedn);
 				}
 				connection->response_stage = 2;
 			}
