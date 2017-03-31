@@ -405,7 +405,7 @@ ldap_status_t ldap_request_search(ldap_connection *connection, int msgid, Search
 	    && strcmp((const char *)req->baseObject.buf, "");
 	const int bad_filter = req->filter.present != Filter_PR_equalityMatch
 	    || strcmp((const char *)attr->attributeDesc.buf, "uid");
-        const char *user = (char *)attr->assertionValue.buf;
+	const char *user = (char *)attr->assertionValue.buf;
 
 	if (connection->response_stage == 0) {
 		/* Allocate the response. */
